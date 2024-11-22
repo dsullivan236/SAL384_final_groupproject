@@ -1,0 +1,100 @@
+---
+title: "Shot Chart"
+author: "Adelaide Gilley"
+date: "2023-04-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+
+```
+
+## R Markdown
+
+
+
+```{r}
+goal_data <- read.csv("goals_attempt_buildup.csv")
+
+ls(goal_data)
+
+goal_data <- goal_data %>%
+  filter(Match.Event.Detail == "Goal" | Match.Event.Detail == "Attempt")
+
+head(goal_data)
+```
+
+
+```{r}
+
+#install.packages("ggsoccer")
+
+library(ggplot2)
+library(ggsoccer)
+
+
+ggplot(goal_data) +
+  annotate_pitch(fill = "#1b893e", colour = "white", limits = FALSE) +
+  geom_point(aes(x = x.Source, y = y.Source,
+             color = Match.Event.Detail)) +
+  theme_pitch() +
+  theme(panel.background = element_rect(fill = "#186d33")) +
+  coord_flip(xlim = c(49, 101)) +
+  scale_y_reverse() +
+  scale_color_manual(values = c(("red" = rgb(1, 0, 0, 0.25)), "#004200")) +
+  labs(title = "Soccer Shot Chart", 
+       x = "X Coordinate", 
+       y = "Y Coordinate", 
+       color = "Outcome")
+
+```
+
+
+```{r}
+goal_data <- goal_data %>%
+  mutate(x_section = cut(x.Source, breaks = c(49, 64, 75, 85, 101)),
+         y_section = cut(y.Source, breaks = c(0, 20, 40, 60, 80)))
+
+section_summary <- goal_data %>%
+  group_by(x_section, y_section) %>%
+  summarise(attempts = n(),
+            goals = sum(Match.Event.Detail == "Goal"),
+            x_center = mean(x.Source),
+            y_center = mean(y.Source)) %>%
+  ungroup()
+ggplot(section_summary, aes(x_center, y_center)) +
+  annotate_pitch(fill = "white", colour = "black", limits = FALSE) +
+  geom_point(aes(size = attempts, color = goals/attempts)) +
+  theme_pitch() +
+  theme(panel.background = element_rect(fill = "white")) +
+  scale_size_area(max_size = 10) +
+  scale_color_gradient(low = "red", high = "green") +
+  labs(title = "Expected Goals by Section", 
+       x = "X Coordinate", 
+       y = "Y Coordinate", 
+       color = "Expected Goals", 
+       size = "Attempts") +
+  theme(legend.position = "bottom")
+
+
+```
+
+
+```{r}
+#creating plot
+ggplot(goal_data, aes(x.Source, y.Source)) +
+  geom_point(aes(color = Match.Event.Detail)) +
+  scale_color_manual(values = c(("red" = rgb(1, 0, 0, 0.25)), "#004200")) +
+  theme_bw() +
+  coord_flip() +
+  labs(title = "Soccer Shot Chart", x = "X Coordinate", y = "Y Coordinate", color = "Outcome")
+```
+
+

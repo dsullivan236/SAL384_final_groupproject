@@ -1,0 +1,311 @@
+---
+title: "Final Project"
+author: "Dillon Sullivan"
+date: "2023-03-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+#install.packages("rpart")
+#install.packages("rpart.plot")
+#install.packages("randomForest")
+#install.packages("caret")
+#install.packages("Metrics")
+#install.packages("ModelMetrics")
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(Metrics)
+library(ModelMetrics)
+```
+
+```{r cars}
+
+#things to do
+# pct of goals by zone
+
+goal_data <-read.csv("goals_attempt_buildup.csv")
+
+ls(goal_data)
+
+# filtering to only include goals and attempts
+goal_data <- goal_data %>%
+  filter(Match.Event.Detail == "Goal" | Match.Event.Detail == "Attempt")
+
+head(goal_data)
+
+match_data <- read.csv("match_temp.csv")
+
+ls(match_data)
+
+head(match_data)
+
+#converting variables for it to work later on
+goal_data$Start <- mdy(goal_data$Start)
+goal_data$Start <- as.character(goal_data$Start)
+match_data$Start <- format(ymd_hms(match_data$Start), "20%y-%m-%d")
+
+# making one dataset that can house everything we want
+join <- full_join(goal_data, match_data, by = "Start")
+
+#cleaning new joined dataset
+join <- join %>%
+  select(Start, Match.Event.Detail, x.Source, y.Source, Formation.Played..Text.,
+         Opposition.Formation..Text.) %>%
+  mutate(Team_Form = Formation.Played..Text.,
+         Opp_Form = Opposition.Formation..Text.) %>%
+  select(-Formation.Played..Text., -Opposition.Formation..Text.)
+
+#creating binary goal variable
+join <- join %>%
+  mutate(Goal = ifelse(Match.Event.Detail == "Goal", 1, 0))
+
+# making variables for models
+join <- drop_na(join)
+
+x_mid_goal <- 50
+y_mid_goal <- 100
+
+join <- join %>%
+  mutate(Distance = sqrt((x.Source - x_mid_goal)^2 + (y.Source - y_mid_goal)^2))
+
+```
+
+
+```{r}
+
+#filtering to make a new dataset
+goal_only <- join %>%
+  filter(Match.Event.Detail == "Goal")
+
+#goal_only %>% group_by(Team_Form) %>% summarize(Goals = n(),
+                                                #Pct_by_form = n()/sum(n())) %>% arrange(-n)
+#exploring the data
+
+goal_only %>% group_by(Opp_Form) %>% summarize(n = n()) %>% arrange(-n)
+
+goal_only %>% group_by(Start) %>% summarize(gp = n()) 
+
+goal_only %>% group_by(Start, Opp_Form) %>% summarize(n = n()) 
+
+goal_only %>%
+  group_by(Start, Opp_Form) %>%
+  summarize(goals = n()) %>%
+  group_by(Start) %>%
+  mutate(gm = goals / sum(goals))
+
+goal_only %>% group_by(Opp_Form) %>% distinct(Start) %>% count()
+
+```
+
+
+```{r}
+
+#creating dummy variables for model
+join <- join %>%
+  mutate(Goal = ifelse(Match.Event.Detail == "Goal", 1, 0),
+         Form3421 = ifelse(Team_Form == "3-4-2-1", 1, 0),
+         Form4141 = ifelse(Team_Form == "4-1-4-1", 1, 0),
+         Form4222 = ifelse(Team_Form == "4-2-2-2", 1, 0),
+         Form4231 = ifelse(Team_Form == "4-2-3-1", 1, 0),
+         Form433 = ifelse(Team_Form == "4-3-3", 1, 0),
+         Form442 = ifelse(Team_Form == "4-4-2", 1, 0),
+         Form532 = ifelse(Team_Form == "5-3-2", 1, 0),
+         Form541 = ifelse(Team_Form == "5-4-1", 1, 0),
+         Opp_Form3421 = ifelse(Opp_Form == "3-4-2-1", 1, 0),
+         Opp_Form4141 = ifelse(Opp_Form == "4-1-4-1", 1, 0),
+         Opp_Form4231 = ifelse(Opp_Form == "4-2-3-1", 1, 0),
+         Opp_Form433 = ifelse(Opp_Form == "4-3-3", 1, 0),
+         Opp_Form442 = ifelse(Opp_Form == "4-4-2", 1, 0),
+         Opp_Form541 = ifelse(Opp_Form == "5-4-1", 1, 0),
+         Opp_Form3412 = ifelse(Opp_Form == "3-4-1-2", 1, 0),
+         Opp_Form352 = ifelse(Opp_Form == "3-5-2", 1, 0))
+
+```
+
+```{r }
+
+#logit for team formations and place on field
+
+logreg_team <- glm(Goal ~ x.Source + y.Source + Form3421 + Form4141 + Form4222 + Form4231 +
+                Form433 + Form442 + Form532,
+              data = join,
+              family = binomial(link = "logit"))
+
+summary(logreg_team)
+
+#logit for opp formations and place on field
+
+logreg_opp <- glm(Goal ~ x.Source + y.Source + Opp_Form3421 + Opp_Form4141 +
+                Opp_Form4231 + Opp_Form433 + Opp_Form442 + Opp_Form3412 + Opp_Form352,
+                data = join,
+                family = binomial(link = "logit"))
+
+summary(logreg_opp)
+
+
+```
+
+```{r}
+
+# making the tree for the diagram
+
+library(rpart)
+library(rpart.plot)
+
+tree <- rpart(Goal ~ y.Source + x.Source, 
+              data = join,
+              method = "class")
+
+# Plot decision tree
+rpart.plot(tree)
+
+join <- join %>%
+  mutate(og_preds = predict(tree, join,
+                            type = "class"))
+
+caret::confusionMatrix(join$Goal, join$og_preds)
+
+```
+
+
+```{r }
+
+#OPTIMIZE THE TREE FOR MINSPLIT
+
+set.seed(20230322)
+train_ind_balls <- sample(nrow(join), nrow(join) * .8)
+train_balls <- join[train_ind_balls, ]
+test_balls <- join[-train_ind_balls, ]
+
+find_min_term <- function(min_term) {
+  min_term <- floor(min_term)
+  mod <- rpart(as.numeric(Goal) ~ y.Source + x.Source,
+               data = train_balls,
+               control = rpart.control(minsplit = min_term))
+preds <- predict(mod, test_balls)
+ModelMetrics::brier(test_balls$Goal, preds)
+}
+opt <- optimize(find_min_term, c(5, 100))
+
+opt$minimum
+
+#OPTIMIZE THE TREE FOR MINBUCKET
+
+find_min_buck <- function(min_buck) {
+  min_buck <- floor(min_buck)
+  mod <- rpart(as.numeric(Goal) ~ y.Source + x.Source,
+               data = train_balls,
+               control = rpart.control(minbucket = min_buck))
+preds <- predict(mod, test_balls)
+ModelMetrics::brier(test_balls$Goal, preds)
+}
+opt2 <- optimize(find_min_buck, c(5, 100))
+
+opt2$minimum
+
+tree_opt <- rpart(Goal ~ y.Source + x.Source, 
+              data = train_balls,
+              method = "class",
+              control = rpart.control(minsplit = floor(opt$minimum)),
+                                      minbucket = floor(opt2$minimum))
+
+rpart.plot(tree_opt)
+
+preds <- predict(tree_opt, test_balls,
+                 type = "class")
+
+caret::confusionMatrix(test_balls$Goal, preds)
+
+```
+
+
+```{r }
+
+#messing around with random forest
+
+set.seed(313)
+
+join <- join %>%
+  mutate(goal_factor = as.numeric(Goal))
+
+forest <- randomForest(formula = Goal ~ x.Source + y.Source + Team_Form + 
+                         Opp_Form,
+                       data = join, proximity = TRUE,
+                       method = "class")
+
+join <- join %>%
+  mutate(predictions = forest$predicted)
+
+varImpPlot(forest)
+
+ggplot(data = join, aes(x = as.numeric(Goal), 
+	y = predictions) +
+  geom_point() + 
+  theme_bw()  +
+  labs(x = "actual goals",
+       y = "predicted goals") +
+  geom_segment(x = 0, y = 0, xend = 600, 
+               yend =600, colour = "grey", size = 1))
+
+caret::confusionMatrix(join$Goal, join$predictions)
+
+# HOW TO FIX THE MODEL 
+# first, split into test and train
+# then optimize parameters
+
+set.seed(313)
+
+ind <- sample(nrow(join), nrow(join) * .7)  
+
+train <- join[ind, ]    
+test <- join[-ind, ]  
+
+find_min_term <- function(min_term) {      
+  min_term <- floor(min_term)     
+  mod <- randomForest(formula = Goal ~ x.Source + y.Source + Team_Form + 
+                         Opp_Form,
+                      data = train, 
+                      proximity = TRUE,
+                      method = "class",                          
+                      ntree = 500,                          
+                      maxnodes = min_term)     
+  preds <- predict(mod, test)      
+  ModelMetrics::brier(preds, test$Goal)     
+  }  
+
+opt_min_term <- optimize(find_min_term, interval = c(1, 760), maximum = FALSE)   
+opt_min_term$minimum  # Optimal minimum node size
+
+# Tune the number of trees    
+find_min_tree <- function(min_tree) {      
+  min_tree <- floor(min_tree)     
+  mod <- randomForest(formula = Goal ~ x.Source + y.Source + Team_Form + 
+                         Opp_Form,
+                       data = join, 
+                      proximity = TRUE,
+                      method = "class",                          
+                      ntree = min_tree,                          
+                      maxnodes = x)     
+  preds <- predict(mod, test)     
+  Metrics::rmse(preds, test$W)      
+}   
+
+opt_ntree <- optimize(find_min_tree, interval = c(500, 10000), maximum = FALSE)   
+opt_ntree$minimum  
+# Optimal number of trees
+
+ggplot(data = test_balls, aes(x = as.numeric(Goal), y = as.numeric(preds))) +
+  geom_point() +
+  theme_bw() +
+  labs(x = "actual goals",
+       y = "predicted goals") +
+  geom_segment(x = 0, y = 0, xend = 600, 
+               yend = 600, colour = "grey", size = 1)
+
+```
+
+
